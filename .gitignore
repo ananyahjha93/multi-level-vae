@@ -1,0 +1,12 @@
+.DS_Store
+.idea/*
+runs/
+reconstructed_images/*
+mnist/*
+__pycache__/*
+log.txt
+classification_accuracy.py
+t_sne.py
+inference.py
+alternate_data_loader.py
+reference_images.pkl
