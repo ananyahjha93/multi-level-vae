@@ -7,16 +7,13 @@ from torchvision import datasets
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from utils import transform_config, reparameterize
-
+import torch.nn.functional as F
 
 class Encoder(nn.Module):
     def __init__(self, style_dim, class_dim):
         super(Encoder, self).__init__()
 
-        self.linear_model = nn.Sequential(OrderedDict([
-            ('linear_1', nn.Linear(in_features=784, out_features=500, bias=True)),
-            ('tan_h_1', nn.Tanh())
-        ]))
+        self.linear = nn.Linear(in_features=784, out_features=500, bias=True)
 
         # style
         self.style_mu = nn.Linear(in_features=500, out_features=style_dim, bias=True)
@@ -28,7 +25,7 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         x = x.view(x.size(0), x.size(1) * x.size(2) * x.size(3))
-        x = self.linear_model(x)
+        x = torch.tanh(self.linear(x))
 
         style_latent_space_mu = self.style_mu(x)
         style_latent_space_logvar = self.style_logvar(x)
@@ -43,22 +40,17 @@ class Decoder(nn.Module):
     def __init__(self, style_dim, class_dim):
         super(Decoder, self).__init__()
 
-        self.linear_model = nn.Sequential(OrderedDict([
-            ('linear_1', nn.Linear(in_features=style_dim + class_dim, out_features=500, bias=True)),
-            ('tan_h_1', nn.Tanh()),
-
-            ('linear_2', nn.Linear(in_features=500, out_features=784, bias=True)),
-            ('sigmoid_final', nn.Sigmoid())
-        ]))
+        self.linear_1= nn.Linear(in_features=style_dim + class_dim, out_features=500, bias=True)
+        self.linear_mu=nn.Linear(in_features=500, out_features=784, bias=True)
+        self.linear_var=nn.Linear(in_features=500, out_features=784, bias=True)
 
     def forward(self, style_latent_space, class_latent_space):
-        x = torch.cat((style_latent_space, class_latent_space), dim=1)
-
-        x = self.linear_model(x)
-        x = x.view(x.size(0), 1, 28, 28)
-
-        return x
-
+        batch_size = style_latent_space.size(0)
+        x = torch.cat((style_latent_space,class_latent_space), dim=1)
+        x = torch.tanh(self.linear_1(x))
+        mu = self.linear_mu(x).view(batch_size, 1, 28, 28)
+        logvar = torch.tanh(self.linear_var(x).view(batch_size, 1, 28, 28))
+        return mu, logvar
 
 class Classifier(nn.Module):
     def __init__(self, z_dim, num_classes):
