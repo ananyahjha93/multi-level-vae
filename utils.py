@@ -19,40 +19,33 @@ def accumulate_group_evidence(class_mu, class_logvar, labels_batch, is_cuda):
     :param is_cuda:
     :return:
     """
-    var_dict = {}
-    mu_dict = {}
+    unique_labels = torch.unique(labels_batch)
+    n_unique_labels = len(unique_labels)
+    if is_cuda:
+        var_inv_matrix = torch.zeros((class_logvar.size()[1], n_unique_labels)).cuda()
+        mu_matrix = torch.zeros((class_mu.size()[1], n_unique_labels)).cuda()
+    else:
+        var_inv_matrix = torch.zeros((class_logvar.size()[1], n_unique_labels))
+        mu_matrix = torch.zeros((class_mu.size()[1], n_unique_labels))
 
     # convert logvar to variance for calculations
     class_var = class_logvar.exp_()
+    class_var[class_var==float(0)] = 1e-6
+    class_var_inv = 1/class_var
 
     # calculate var inverse for each group using group vars
-    for i in range(len(labels_batch)):
-        group_label = labels_batch[i].item()
-
-        # remove 0 values from variances
-        class_var[i][class_var[i] == float(0)] = 1e-6
-
-        if group_label in var_dict.keys():
-            var_dict[group_label] += 1 / class_var[i]
-        else:
-            var_dict[group_label] = 1 / class_var[i]
-
+    for i in range(n_unique_labels):
+        var_inv_matrix[:, i] = torch.sum(class_var_inv[labels_batch == unique_labels[i]], 0)
     # invert var inverses to calculate mu and return value
-    for group_label in var_dict.keys():
-        var_dict[group_label] = 1 / var_dict[group_label]
+    var_matrix = 1 / var_inv_matrix
 
     # calculate mu for each group
-    for i in range(len(labels_batch)):
-        group_label = labels_batch[i].item()
-
-        if group_label in mu_dict.keys():
-            mu_dict[group_label] += class_mu[i] * (1 / class_var[i])
-        else:
-            mu_dict[group_label] = class_mu[i] * (1 / class_var[i])
+    for i in range(n_unique_labels):
+        mu_matrix[:, i] = torch.sum(class_mu[labels_batch == unique_labels[i]]*
+                                    class_var_inv[labels_batch == unique_labels[i]], 0)
 
     # multiply group var with sums calculated above to get mu for the group
-    for group_label in mu_dict.keys():
-        mu_dict[group_label] *= var_dict[group_label]
+    mu_matrix *= var_matrix
 
     # replace individual mu and logvar values for each sample with group mu and logvar
     group_mu = torch.FloatTensor(class_mu.size(0), class_mu.size(1))
@@ -62,14 +55,14 @@ def accumulate_group_evidence(class_mu, class_logvar, labels_batch, is_cuda):
         group_mu = group_mu.cuda()
         group_var = group_var.cuda()
 
-    for i in range(len(labels_batch)):
-        group_label = labels_batch[i].item()
+    for i in range(n_unique_labels):
+        label = unique_labels[i]
+        num_element = torch.sum(labels_batch == label)
+        group_mu[labels_batch == label] = mu_matrix[:, i].unsqueeze(0).repeat(num_element, 1)
+        group_var[labels_batch == label] = var_matrix[:, i].unsqueeze(0).repeat(num_element, 1)
 
-        group_mu[i] = mu_dict[group_label]
-        group_var[i] = var_dict[group_label]
-
-        # remove 0 from var before taking log
-        group_var[i][group_var[i] == float(0)] = 1e-6
+    # remove 0 from var before taking log
+    group_var[group_var == float(0)] = 1e-6
 
     # convert group vars into logvars before returning
     return Variable(group_mu, requires_grad=True), Variable(torch.log(group_var), requires_grad=True)
@@ -93,23 +86,28 @@ def reparameterize(training, mu, logvar):
 
 
 def group_wise_reparameterize(training, mu, logvar, labels_batch, cuda):
+    unique_labels = torch.unique(labels_batch)
+    n_unique_labels = len(unique_labels)
     eps_dict = {}
 
     # generate only 1 eps value per group label
-    for label in torch.unique(labels_batch):
+    for label in unique_labels:
         if cuda:
-            eps_dict[label.item()] = torch.cuda.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)
+            eps_dict[label.item()] = torch.cuda.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)[0].unsqueeze_(
+                -1).unsqueeze_(-1)
+
         else:
-            eps_dict[label.item()] = torch.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)
+            eps_dict[label.item()] = torch.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)[0]
 
     if training:
+        # multiply std by correct eps and add mu
         std = logvar.mul(0.5).exp_()
         reparameterized_var = Variable(std.data.new(std.size()))
-
-        # multiply std by correct eps and add mu
-        for i in range(logvar.size(0)):
-            reparameterized_var[i] = std[i].mul(Variable(eps_dict[labels_batch[i].item()]))
-            reparameterized_var[i].add_(mu[i])
+        for i in range(n_unique_labels):
+            label = unique_labels[i]
+            labels_true = labels_batch == label
+            reparameterized_var[labels_true] = std[labels_true].mul(Variable(eps_dict[label.item()])).add(
+                mu[labels_true])
 
         return reparameterized_var
     else:

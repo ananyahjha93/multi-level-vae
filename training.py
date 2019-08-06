@@ -6,7 +6,7 @@ import torch
 import torch.optim as optim
 from torchvision import datasets
 from torch.autograd import Variable
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 from utils import weights_init
 from utils import transform_config
