@@ -93,11 +93,9 @@ def group_wise_reparameterize(training, mu, logvar, labels_batch, cuda):
     # generate only 1 eps value per group label
     for label in unique_labels:
         if cuda:
-            eps_dict[label.item()] = torch.cuda.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)[0].unsqueeze_(
-                -1).unsqueeze_(-1)
-
+            eps_dict[label.item()] = torch.cuda.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)
         else:
-            eps_dict[label.item()] = torch.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)[0]
+            eps_dict[label.item()] = torch.FloatTensor(1, logvar.size(1)).normal_(0., 0.1)
 
     if training:
         # multiply std by correct eps and add mu
