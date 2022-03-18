@@ -11,13 +11,13 @@ from alternate_data_loader import MNIST_Paired
 from torch.utils.data import DataLoader
 from utils import transform_config
 from networks import Encoder, Decoder
-from utils import group_wise_reparameterize, accumulate_group_evidence, reparameterize
+from utils import group_wise_reparameterize, accumulate_group_evidence, reparameterize, group_wise_reparameterize_each
 
 parser = argparse.ArgumentParser()
 
 # add arguments
 parser.add_argument('--cuda', type=bool, default=False, help="run the following code on a GPU")
-parser.add_argument('--accumulate_evidence', type=str, default=False, help="accumulate class evidence before producing swapped images")
+parser.add_argument('--accumulate_evidence', type=int, default=0, help="accumulate class evidence before producing swapped images")
 
 parser.add_argument('--batch_size', type=int, default=64, help="batch size for training")
 parser.add_argument('--image_size', type=int, default=28, help="height and width of the image")
@@ -42,9 +42,9 @@ if __name__ == '__main__':
     decoder = Decoder(style_dim=FLAGS.style_dim, class_dim=FLAGS.class_dim)
 
     encoder.load_state_dict(
-        torch.load(os.path.join('checkpoints', FLAGS.encoder_save), map_location=lambda storage, loc: storage))
+        torch.load(FLAGS.encoder_save, map_location=lambda storage, loc: storage))
     decoder.load_state_dict(
-        torch.load(os.path.join('checkpoints', FLAGS.decoder_save), map_location=lambda storage, loc: storage))
+        torch.load(FLAGS.decoder_save, map_location=lambda storage, loc: storage))
 
     """
     variable definition
@@ -62,22 +62,28 @@ if __name__ == '__main__':
     image_batch, _, labels_batch = next(loader)
 
     style_mu, style_logvar, class_mu, class_logvar = encoder(Variable(image_batch))
-    style_latent_embeddings = reparameterize(training=True, mu=style_mu, logvar=style_logvar)
 
     if FLAGS.accumulate_evidence:
-        grouped_mu, grouped_logvar = accumulate_group_evidence(
-            class_mu.data, class_logvar.data, labels_batch, FLAGS.cuda
-        )
-
-        class_latent_embeddings = group_wise_reparameterize(
-            training=True, mu=grouped_mu, logvar=grouped_logvar, labels_batch=labels_batch, cuda=FLAGS.cuda
-        )
+        content_mu, content_logvar, list_g, sizes_group = accumulate_group_evidence(FLAGS, class_mu, class_logvar, labels_batch, FLAGS.cuda
+            )
+        class_latent_embeddings, indexes, _ = group_wise_reparameterize_each(
+                        training=True, mu=content_mu, logvar=content_logvar, labels_batch=labels_batch, list_groups_labels=list_g,
+                        sizes_group=sizes_group, cuda=FLAGS.cuda)
+        style_latent_embeddings, indexes, _ =group_wise_reparameterize_each(
+                        training=True,mu=style_mu, logvar=style_logvar,
+                        labels_batch=labels_batch,list_groups_labels=list_g,
+                        sizes_group=sizes_group, cuda=FLAGS.cuda)
+        reindexed_indexes = labels_batch[indexes]
     else:
         class_latent_embeddings = reparameterize(training=True, mu=class_mu, logvar=class_logvar)
+        style_latent_embeddings = reparameterize(training=True, mu=style_mu, logvar=style_logvar)
+        reindexed_indexes = labels_batch
 
-    # perform t-SNE embedding
-    vis_data = TSNE(n_components=2, verbose=1, perplexity=30.0, n_iter=1000).fit_transform(class_latent_embeddings.data.numpy())
 
+    from sklearn.decomposition import PCA
+    pca = PCA(n_components=2)
+    vis_data = pca.fit_transform(class_latent_embeddings.data.numpy())
+    # vis_data = TSNE(n_components=2, verbose=1, perplexity=30.0, n_iter=1000).fit_transform(class_latent_embeddings.data.numpy())
     # plot the result
     vis_x = vis_data[:, 0]
     vis_y = vis_data[:, 1]
@@ -86,8 +92,23 @@ if __name__ == '__main__':
     ax.set_yticklabels([])
     ax.set_xticklabels([])
 
-    plt.scatter(vis_x, vis_y, marker='.', c=labels_batch.numpy(), cmap=plt.cm.get_cmap("jet", 10))
+    plt.scatter(vis_x, vis_y, marker='.', c=reindexed_indexes.numpy(), cmap=plt.cm.get_cmap("jet", 10),alpha=0.5)
+    ax.set_title('Content PCA')
     plt.axis('off')
-    plt.colorbar(ticks=range(10))
+    plt.clim(-0.5, 9.5)
+    plt.show()
+
+    pca = PCA(n_components=2)
+    vis_data = pca.fit_transform(style_latent_embeddings.data.numpy())
+    # vis_data = TSNE(n_components=2, verbose=1, perplexity=30.0, n_iter=1000).fit_transform(style_latent_embeddings.data.numpy())
+    # plot the result
+    vis_x = vis_data[:, 0]
+    vis_y = vis_data[:, 1]
+    fig, ax = plt.subplots(1)
+    ax.set_title('Style PCA')
+    ax.set_yticklabels([])
+    ax.set_xticklabels([])
+    plt.scatter(vis_x, vis_y, marker='.', c=reindexed_indexes.numpy(), cmap=plt.cm.get_cmap("jet", 10),alpha=0.5)
+    plt.axis('off')
     plt.clim(-0.5, 9.5)
     plt.show()
